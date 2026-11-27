@@ -2,7 +2,7 @@
 
 The same task-management command-line application implemented in ten languages to compare their syntax, idioms, tooling, and ergonomics against a common behavioral specification.
 
-See [SPEC.md](SPEC.md) for the shared commands, storage format, expected output, edge cases, and manual test sequence. The spec also preserves the original planning notes.
+See [docs/SPEC.md](docs/SPEC.md) for the shared commands, storage format, expected output, edge cases, and manual test sequence. The spec also preserves the original planning notes.
 
 ## Implementations
 
