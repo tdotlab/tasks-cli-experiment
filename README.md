@@ -1,34 +1,36 @@
 # Tasks CLI Experiment
 
-The same task-management command-line application implemented in ten languages to compare their syntax, idioms, tooling, and ergonomics against a common behavioral specification.
+The same task-management application implemented in twelve languages to compare syntax, idioms, tooling, and ergonomics against a common behavioral baseline. The current implementations extend the original CLI with an interactive terminal UI.
 
-See [docs/SPEC.md](docs/SPEC.md) for the original shared specification, including commands, storage format, expected output, edge cases, and manual test sequence. Python and Go now implement an expanded version of the app; the original spec remains a baseline rather than a description of every current feature.
+See [docs/SPEC.md](docs/SPEC.md) for the original shared specification and manual test sequence. It is preserved as the historical baseline; the current v2 implementations have additional commands and storage metadata.
 
 ## Implementations
 
-Each language has its own directory under `src/`.
+Each language has its own directory under `src/`. Run these examples from that directory.
 
-| Language | Entry point | Example build/run (from its directory) |
+| Language | Entry point | Example build/run |
 | --- | --- | --- |
-| C | [`src/c/tasks.c`](src/c/tasks.c) | `cc tasks.c -o tasks` then `./tasks` |
-| C++ | [`src/cpp/tasks.cpp`](src/cpp/tasks.cpp) | `c++ -std=c++17 tasks.cpp -o tasks` then `./tasks` |
+| C | [`src/c/tasks.c`](src/c/tasks.c) | `cc -O2 tasks.c -o tasks` then `./tasks` |
+| C++ | [`src/cpp/tasks.cpp`](src/cpp/tasks.cpp) | `c++ -std=c++17 -O2 tasks.cpp -o tasks` then `./tasks` |
+| C# | [`src/csharp/tasks.cs`](src/csharp/tasks.cs) | `dotnet run --project tasks.csproj` (.NET 8) |
 | Go | [`src/go/tasks.go`](src/go/tasks.go) | `go run tasks.go` |
 | Java | [`src/java/Tasks.java`](src/java/Tasks.java) | `javac Tasks.java` then `java Tasks` |
-| Lua | [`src/lua/tasks.lua`](src/lua/tasks.lua) | `lua tasks.lua` |
+| JavaScript | [`src/javascript/tasks.js`](src/javascript/tasks.js) | `node tasks.js` |
+| Lua | [`src/lua/tasks.lua`](src/lua/tasks.lua) | `lua tasks.lua` (Lua 5.3+) |
 | Python | [`src/python/tasks.py`](src/python/tasks.py) | `python3 tasks.py` |
 | Ruby | [`src/ruby/tasks.rb`](src/ruby/tasks.rb) | `ruby tasks.rb` |
-| Rust | [`src/rust/tasks.rs`](src/rust/tasks.rs) | `rustc tasks.rs -o tasks` then `./tasks` |
-| TypeScript | [`src/typescript/tasks.ts`](src/typescript/tasks.ts) | `npx tsx tasks.ts` (requires Node.js and tsx) |
+| Rust | [`src/rust/tasks.rs`](src/rust/tasks.rs) | `rustc -O tasks.rs -o tasks` then `./tasks` |
+| TypeScript | [`src/typescript/tasks.ts`](src/typescript/tasks.ts) | `npm install` then `npm run build` and `npm start` |
 | Zig | [`src/zig/tasks.zig`](src/zig/tasks.zig) | `zig build-exe tasks.zig` then `./tasks` |
 
-Append `add "Buy milk"`, `list`, `done 1`, `rm 1`, `clear`, or `stats` to the invocation. Each implementation uses a `tasks.md` file in its working directory. Run in separate working directories for independent test data.
+## Current v2 behavior
 
-### Expanded Python and Go versions
+The implementations provide an interactive TUI by default, plus CLI commands including `add`, `list`, `done`, `undone`, `rm`, `edit`, `search`, `clear`, `stats`, `undo`, and `help`. For command-line arguments with C#, use `dotnet run -- list`; with TypeScript, use `npm start -- list`.
 
-Both now open an interactive terminal UI by default and support priorities, due dates, tags, projects, filters, editing, search, and undo via `tasks.md.bak`. Run with `help` to see the current CLI commands. Python's TUI uses `curses`; Go's uses ANSI terminal controls and `stty -F /dev/tty`.
+The intended shared storage format is `tasks.md` in the working directory, with optional priority, due date, tags, and projects. Example: `- [ ] (P1) due:2026-11-30 Buy milk #home +groceries`. Undo uses `tasks.md.bak`. Use separate working directories for independent comparisons until interoperability is tested.
 
-The expanded versions do not yet have identical output or due-date storage syntax (Python uses a bare date; Go uses `due:YYYY-MM-DD`). Use separate task files when comparing implementations.
+The TUIs need an interactive terminal. Some implementations use POSIX terminal APIs or `stty`; Python uses `curses`. Platform and compiler compatibility may vary.
 
 ## Status
 
-Source snapshot synchronized from Google Drive. Python and Go have expanded CLI/TUI implementations; the other languages retain the original baseline. The existing Zig implementation was retained because its Drive folder was empty at sync time. Toolchain compatibility and behavioral conformance have not yet been verified. Build/run examples are illustrative, not a tested compatibility matrix.
+All twelve v2 implementations synchronized from Google Drive, including the C# project and TypeScript build configuration. Build/run examples are illustrative; compilation, runtime behavior, and cross-language conformance have not yet been verified. The original shared spec remains unchanged.

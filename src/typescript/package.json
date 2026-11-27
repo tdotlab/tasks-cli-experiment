@@ -1,0 +1,1 @@
+{"bin": {"tasks": "dist/tasks.js"}, "devDependencies": {"@types/node": "^20.11.0", "typescript": "^5.4.0"}, "name": "tasks", "private": true, "scripts": {"build": "tsc", "start": "node dist/tasks.js"}, "version": "0.0.2"}

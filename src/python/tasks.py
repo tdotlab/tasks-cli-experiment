@@ -1,111 +1,92 @@
 #!/usr/bin/env python3
-"""tasks v2 - CLI + modern TUI, same tasks.md file.
-Format: - [ ] (P1) 2026-12-01 Buy ass cream #personal +shopping
-Priority and due are optional. Tags #tag and projects +project live in the text.
-Run with no args to open the TUI: python3 tasks.py
-Run python3 tasks.py help for CLI commands.
-"""
+# tasks.py - Todo CLI v2 (Python, stdlib only)
+# Same spec + same tasks.md as all other languages.
+# Run: python3 tasks.py  |  python3 tasks.py list  |  python3 tasks.py add "Buy milk #home"
+# Audit fix (2026-11-27): prompt uses get_wch key-by-key only.
+# No fixed-size prompt buffer, no truncated read. Dynamic list, 4096 cap.
+
+import sys
 import os
 import re
 import shutil
-import sys
-from dataclasses import dataclass, field
+import curses
 from datetime import date
 
 TASKS_FILE = "tasks.md"
 BACKUP_FILE = "tasks.md.bak"
+MAX_INPUT = 4096
 
-HELP = """Usage: tasks <command> [args]  (no args = open TUI)
-
-Commands:
-  tui                          Open modern TUI
-  add "Buy milk" [--priority P1] [--due 2026-12-01]
-                               Add a task. You can also write (P1) and 2026-12-01 inline.
-  list [--tag personal] [--project shopping] [--priority P1] [--overdue] [--today] [--done] [--todo] [--search cream]
-                               Show tasks
-  done 2                       Mark task 2 complete
-  undone 2                     Mark task 2 not done
-  rm 2                         Delete task 2
-  edit 2 "New text"            Replace task 2 text (keeps priority/due unless you include new ones)
-  search cream                 Search text / tags
-  clear                        Remove completed tasks
-  stats                        Show totals + by tag / priority
-  undo                         Restore last backup
-"""
-
-TAG_RE = re.compile(r"#(\w+)")
-PROJECT_RE = re.compile(r"\+(\w+)")
-LINE_RE = re.compile(r"^- \[( |x)\] (?:\((P[123])\) )?(\d{4}-\d{2}-\d{2} )?(.+)$")
-
-
-@dataclass
 class Task:
-    done: bool = False
-    priority: str = ""  # "", "P1", "P2", "P3"
-    due: str = ""  # "", "YYYY-MM-DD"
-    text: str = ""
+    def __init__(self, done=False, priority="", due="", text=""):
+        self.done = done
+        self.priority = priority
+        self.due = due
+        self.text = text
 
-    @property
-    def tags(self):
-        return TAG_RE.findall(self.text)
+tasks = []
 
-    @property
-    def projects(self):
-        return PROJECT_RE.findall(self.text)
+def trim(s):
+    return s.strip()
 
+def collapse_spaces(s):
+    return " ".join(s.split())
 
 def today_str():
     return date.today().isoformat()
 
-
 def is_overdue(t):
-    return bool(t.due) and not t.done and t.due < today_str()
-
+    return bool(t.due) and t.due < today_str()
 
 def is_today(t):
-    return t.due == today_str()
-
+    return bool(t.due) and t.due == today_str()
 
 def parse_line(line):
-    line = line.rstrip("\n").rstrip("\r")
-    m = LINE_RE.match(line)
-    if not m:
+    if not line.startswith("- ["):
         return None
-    done = m.group(1) == "x"
-    priority = m.group(2) or ""
-    if priority:
-        priority = "P" + priority[-1]
-    due = m.group(3) or ""
-    text = m.group(4) or ""
-    return Task(done=done, priority=priority, due=due, text=text)
-
+    if len(line) < 5:
+        return None
+    mark = line[3]
+    if mark not in (" ", "x"):
+        return None
+    if line[4] != "]":
+        return None
+    t = Task(done=(mark == "x"))
+    rest = trim(line[5:])
+    if rest.startswith("(P1)") or rest.startswith("(P2)") or rest.startswith("(P3)"):
+        t.priority = rest[1:3]
+        rest = trim(rest[4:])
+    if rest.startswith("due:") and len(rest) >= 14:
+        d = rest[4:14]
+        if len(d) == 10 and d[4] == "-" and d[7] == "-":
+            t.due = d
+            rest = trim(rest[14:])
+    t.text = trim(rest)
+    return t
 
 def format_task(t):
-    parts = ["- [x] " if t.done else "- [ ] "]
+    s = "- [" + ("x" if t.done else " ") + "]"
     if t.priority:
-        parts.append(f"({t.priority}) ")
+        s += " (" + t.priority + ")"
     if t.due:
-        parts.append(f"{t.due} ")
-    parts.append(t.text)
-    return "".join(parts)
-
+        s += " due:" + t.due
+    s += " " + t.text
+    return s
 
 def load_tasks():
-    tasks = []
+    tasks.clear()
     if not os.path.exists(TASKS_FILE):
-        return tasks
-    with open(TASKS_FILE, encoding="utf-8") as f:
-        for line in f:
-            if line.strip() == "":
+        return
+    with open(TASKS_FILE, "r", encoding="utf-8", errors="replace") as f:
+        for raw in f:
+            line = raw.rstrip("\n").rstrip("\r")
+            if not trim(line):
                 continue
             t = parse_line(line)
-            if t:
+            if t is not None:
                 tasks.append(t)
-    return tasks
 
-
-def save_tasks(tasks, backup=True):
-    if backup and os.path.exists(TASKS_FILE):
+def save_tasks():
+    if os.path.exists(TASKS_FILE):
         try:
             shutil.copyfile(TASKS_FILE, BACKUP_FILE)
         except OSError:
@@ -114,125 +95,95 @@ def save_tasks(tasks, backup=True):
         for t in tasks:
             f.write(format_task(t) + "\n")
 
+def parse_add_text(full):
+    t = Task()
+    text = trim(full)
+    if text.startswith("P1 ") or text.startswith("P2 ") or text.startswith("P3 "):
+        t.priority = text[:2]
+        text = trim(text[3:])
+    elif text.startswith("(P1)") or text.startswith("(P2)") or text.startswith("(P3)"):
+        t.priority = text[1:3]
+        text = trim(text[4:])
+    pos = text.find("due:")
+    if pos != -1 and len(text) >= pos + 14:
+        cand = text[pos + 4:pos + 14]
+        if len(cand) == 10 and cand[4] == "-" and cand[7] == "-":
+            t.due = cand
+            before = trim(text[:pos])
+            after = trim(text[pos + 14:])
+            text = trim(before + " " + after)
+    t.text = collapse_spaces(text)
+    return t
 
-def parse_add_text(full_text):
-    """Pull (P1) / P1 / due:DATE / DATE out of free text."""
-    priority = ""
-    due = ""
-    text = full_text
-
-    m = re.search(r"\(P([123])\)", text)
-    if m:
-        priority = "P" + m.group(1)
-        text = text.replace(m.group(0), "", 1)
-    else:
-        m = re.search(r"\bP([123])\b", text)
-        if m:
-            priority = "P" + m.group(1)
-            text = text.replace(m.group(0), "", 1)
-
-    m = re.search(r"due:(\d{4}-\d{2}-\d{2})", text)
-    if m:
-        due = m.group(1)
-        text = text.replace(m.group(0), "", 1)
-    else:
-        m = re.search(r"\b(\d{4}-\d{2}-\d{2})\b", text)
-        if m:
-            due = m.group(1)
-            text = text.replace(m.group(0), "", 1)
-
-    text = re.sub(r"\s+", " ", text).strip()
-    return Task(done=False, priority=priority, due=due, text=text)
-
-
-def parse_task_number(s, count):
+def parse_task_number(s, n):
     try:
-        n = int(s)
+        v = int(trim(s))
     except ValueError:
         return None
-    if n < 1 or n > count:
+    if v < 1 or v > n:
         return None
-    return n - 1
+    return v - 1
 
-
-def apply_filter(tasks, mode="all", search=""):
-    out = tasks
+def matches_mode(t, mode):
     if mode == "todo":
-        out = [t for t in out if not t.done]
-    elif mode == "done":
-        out = [t for t in out if t.done]
-    elif mode == "overdue":
-        out = [t for t in out if is_overdue(t)]
-    elif mode == "today":
-        out = [t for t in out if is_today(t)]
-    elif mode in ("P1", "P2", "P3"):
-        out = [t for t in out if t.priority == mode]
-    if search:
-        q = search.lower()
-        out = [t for t in out if q in t.text.lower() or q in " ".join(t.tags).lower()]
+        return not t.done
+    if mode == "done":
+        return t.done
+    if mode == "overdue":
+        return (not t.done) and is_overdue(t)
+    if mode == "today":
+        return (not t.done) and is_today(t)
+    return True
+
+def matches_search(t, q):
+    if not q:
+        return True
+    return q.lower() in t.text.lower()
+
+def filtered_indices(mode, search):
+    out = []
+    for i, t in enumerate(tasks):
+        if not matches_mode(t, mode):
+            continue
+        if not matches_search(t, search):
+            continue
+        out.append(i)
     return out
 
+def count_done():
+    return sum(1 for t in tasks if t.done)
 
-# ---------- CLI pretty printing ----------
+def count_overdue():
+    return sum(1 for t in tasks if (not t.done) and is_overdue(t))
 
-def use_color():
-    return sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
+def has_tag(t, tag):
+    want = tag[1:] if tag.startswith("#") else tag
+    for tok in t.text.split():
+        if len(tok) > 1 and tok[0] == "#":
+            if tok == tag or tok[1:] == want:
+                return True
+    return False
 
+def has_project(t, proj):
+    want = proj[1:] if proj.startswith("+") else proj
+    for tok in t.text.split():
+        if len(tok) > 1 and tok[0] == "+":
+            if tok == proj or tok[1:] == want:
+                return True
+    return False
 
-def c(text, code):
-    if not use_color():
-        return text
-    return f"\033[{code}m{text}\033[0m"
-
-
-def priority_str(t):
-    if t.priority == "P1":
-        return c("(P1)", "91;1")
-    if t.priority == "P2":
-        return c("(P2)", "93;1")
-    if t.priority == "P3":
-        return c("(P3)", "92;1")
-    return ""
-
-
-def due_str(t):
-    if not t.due:
-        return ""
-    if is_overdue(t):
-        return c(t.due, "91;1")
-    if is_today(t):
-        return c(t.due, "93;1")
-    return c(t.due, "90")
-
-
-def text_colored(t):
-    # color #tags cyan, +projects magenta
-    out = []
-    for tok in t.text.split(" "):
-        if tok.startswith("#"):
-            out.append(c(tok, "96"))
-        elif tok.startswith("+"):
-            out.append(c(tok, "95"))
-        else:
-            out.append(tok)
-    return " ".join(out)
-
-
-def print_task(i, t):
+def print_task(idx, t):
     mark = "x" if t.done else " "
-    parts = [f"{i+1:>2}. [{mark}]"]
+    s = f"{idx + 1}. [{mark}] "
     if t.priority:
-        parts.append(priority_str(t))
+        s += t.priority + " "
     if t.due:
-        parts.append(due_str(t))
-    parts.append(text_colored(t))
-    print(" ".join(p for p in parts if p))
+        s += t.due + " "
+    s += t.text
+    print(s)
 
-
-def cli_list(tasks, args):
-    # parse --tag X --project X --priority X --overdue --today --done --todo --search X
-    tag = project = priority = search = ""
-    mode = "all"
+def cli_list(args):
+    tag = ""; project = ""; priority = ""; search = ""; mode = "all"
     i = 0
     while i < len(args):
         a = args[i]
@@ -241,331 +192,384 @@ def cli_list(tasks, args):
         if a == "--project" and i + 1 < len(args):
             project = args[i + 1]; i += 2; continue
         if a == "--priority" and i + 1 < len(args):
-            priority = args[i + 1].upper(); i += 2; continue
+            priority = args[i + 1]; i += 2; continue
         if a == "--search" and i + 1 < len(args):
             search = args[i + 1]; i += 2; continue
         if a == "--overdue":
-            mode = "overdue"; i += 1; continue
-        if a == "--today":
-            mode = "today"; i += 1; continue
-        if a == "--done":
-            mode = "done"; i += 1; continue
-        if a == "--todo":
-            mode = "todo"; i += 1; continue
+            mode = "overdue"
+        elif a == "--today":
+            mode = "today"
+        elif a == "--done":
+            mode = "done"
+        elif a == "--todo":
+            mode = "todo"
         i += 1
-
-    filtered = apply_filter(tasks, mode, search)
-    if tag:
-        filtered = [t for t in filtered if tag.lstrip("#") in t.tags]
-    if project:
-        filtered = [t for t in filtered if project.lstrip("+") in t.projects]
-    if priority:
-        filtered = [t for t in filtered if t.priority == priority]
-
-    if not filtered:
-        print("No tasks yet.")
-        return
-    # show index in full list, not filtered position, so done/rm numbers still work
-    for t in filtered:
-        idx = tasks.index(t)
+    shown = 0
+    for idx in filtered_indices(mode, search):
+        t = tasks[idx]
+        if tag and not has_tag(t, tag):
+            continue
+        if project and not has_project(t, project):
+            continue
+        if priority and t.priority != priority:
+            continue
         print_task(idx, t)
+        shown += 1
+    if shown == 0:
+        print("No tasks.")
 
+# --- TUI ---
+# AUDITED FIXES:
+# 1. Prompt: reads keys one-by-one via get_wch into a growing list,
+#    4096 cap only, horizontal scroll. No fixed-size prompt buffer.
+# 2. Exit: q / Q / Esc / Ctrl-C / Ctrl-D / Ctrl-Q quit from main list.
+#    Footer always shows it. In prompt, Enter saves, Esc / Ctrl-C cancels.
+#    curses.wrapper restores terminal on exit.
 
-# ---------- TUI ----------
-
-def run_tui(tasks):
-    try:
-        import curses
-    except ImportError:
-        print("Error: curses is not available on this platform. Use CLI commands instead.")
-        return
-
-    def prompt(stdscr, h, w, label):
-        curses.echo()
-        curses.curs_set(1)
-        stdscr.addstr(h - 1, 0, " " * (w - 1))
-        stdscr.addstr(h - 1, 0, label[: w - 1])
+def prompt_input(stdscr, label):
+    chars = []
+    cursor = 0
+    offset = 0
+    label_len = len(label) + 1
+    while True:
+        rows, cols = stdscr.getmaxyx()
+        avail = cols - label_len - 1
+        if avail < 10:
+            avail = 10
+        if cursor < offset:
+            offset = cursor
+        if cursor >= offset + avail:
+            offset = cursor - avail + 1
+        stdscr.move(rows - 2, 0)
+        stdscr.clrtoeol()
+        stdscr.addstr(rows - 2, 0, "Enter=save  Esc / Ctrl-C=cancel"[:max(0, cols - 1)])
+        stdscr.move(rows - 1, 0)
+        stdscr.clrtoeol()
+        stdscr.addstr(rows - 1, 0, label + " " + "".join(chars[offset:offset + avail])[:max(0, cols - 1)])
+        cx = label_len + (cursor - offset)
+        if cx >= cols:
+            cx = cols - 1
+        if cx < 0:
+            cx = 0
+        stdscr.move(rows - 1, cx)
         stdscr.refresh()
         try:
-            raw = stdscr.getstr(h - 1, min(len(label), w - 1), w - len(label) - 1)
-            s = raw.decode("utf-8", errors="ignore").strip()
-        except Exception:
-            s = ""
-        curses.noecho()
-        curses.curs_set(0)
-        return s
-
-    def main(stdscr):
-        curses.curs_set(0)
-        stdscr.keypad(True)
-        if curses.has_colors():
-            curses.start_color()
-            curses.use_default_colors()
-            curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLUE)   # header
-            curses.init_pair(2, curses.COLOR_RED, -1)                    # P1
-            curses.init_pair(3, curses.COLOR_YELLOW, -1)                 # P2
-            curses.init_pair(4, curses.COLOR_GREEN, -1)                  # P3
-            curses.init_pair(5, curses.COLOR_RED, -1)                    # overdue
-            curses.init_pair(6, curses.COLOR_YELLOW, -1)                 # today
-            curses.init_pair(7, curses.COLOR_CYAN, -1)                   # #tag
-            curses.init_pair(8, curses.COLOR_MAGENTA, -1)                # +project
-            curses.init_pair(9, curses.COLOR_BLACK, curses.COLOR_WHITE)  # selected
-            curses.init_pair(10, curses.COLOR_WHITE, curses.COLOR_BLUE)  # footer
-            curses.init_pair(11, curses.COLOR_YELLOW, -1)                 # status
-
-        selected = 0
-        filter_mode = "all"
-        search = ""
-        status = "Welcome - j/k move, space done, a add, e edit, x delete, / search, f filter, u undo, q quit"
-        filters = ["all", "todo", "done", "overdue", "today", "P1", "P2", "P3"]
-
-        while True:
-            h, w = stdscr.getmaxyx()
-            stdscr.clear()
-
-            total = len(tasks)
-            done_n = sum(1 for t in tasks if t.done)
-            overdue_n = sum(1 for t in tasks if is_overdue(t))
-            header = f"  TASKS  •  Total {total}  •  Done {done_n}  •  Overdue {overdue_n}  •  Filter: {filter_mode}" + (f"  •  Search: {search}" if search else "")
-            try:
-                stdscr.addstr(0, 0, header.ljust(w)[: w - 1], curses.color_pair(1) | curses.A_BOLD)
-            except curses.error:
-                pass
-
-            visible = apply_filter(tasks, filter_mode, search)
-            if selected >= len(visible):
-                selected = max(0, len(visible) - 1)
-
-            # column header
-            if h > 3:
-                stdscr.addstr(1, 0, "  #  DONE  PRI  DUE         TASK", curses.A_DIM)
-
-            for idx, t in enumerate(visible):
-                y = idx + 2
-                if y >= h - 2:
-                    break
-                is_sel = idx == selected
-                row_attr = curses.color_pair(9) if is_sel else curses.A_NORMAL
-                if t.done and not is_sel:
-                    row_attr |= curses.A_DIM
-                # clear row
-                try:
-                    stdscr.addstr(y, 0, " " * (w - 1), row_attr)
-                except curses.error:
-                    continue
-                x = 0
-                prefix = f" {idx+1:>2}. [{'x' if t.done else ' '}] "
-                stdscr.addstr(y, x, prefix, row_attr)
-                x += len(prefix)
-                if t.priority:
-                    col = 2 if t.priority == "P1" else 3 if t.priority == "P2" else 4
-                    p = f"({t.priority}) "
-                    stdscr.addstr(y, x, p, curses.color_pair(col) | curses.A_BOLD | (row_attr if is_sel else 0))
-                    x += len(p)
-                else:
-                    stdscr.addstr(y, x, "      ", row_attr)
-                    x += 6
-                if t.due:
-                    dcol = 5 if is_overdue(t) else 6 if is_today(t) else 0
-                    attr = (curses.color_pair(dcol) | curses.A_BOLD) if dcol and not is_sel else row_attr
-                    stdscr.addstr(y, x, f"{t.due} ", attr)
-                    x += len(t.due) + 1
-                else:
-                    stdscr.addstr(y, x, "           ", row_attr)
-                    x += 11
-                # text tokens with #tag / +project colors
-                for tok in t.text.split(" "):
-                    if x >= w - 2:
-                        break
-                    tok_s = tok + " "
-                    if tok.startswith("#"):
-                        a = curses.color_pair(7) | (row_attr if is_sel else 0)
-                    elif tok.startswith("+"):
-                        a = curses.color_pair(8) | (row_attr if is_sel else 0)
-                    else:
-                        a = row_attr
-                    try:
-                        stdscr.addstr(y, x, tok_s[: w - x - 1], a)
-                    except curses.error:
-                        break
-                    x += len(tok_s)
-
-            footer = " j/k move  •  space done  •  a add  •  e edit  •  x delete  •  / search  •  f filter  •  u undo  •  c clear done  •  q quit "
-            try:
-                stdscr.addstr(h - 2, 0, footer.ljust(w)[: w - 1], curses.color_pair(10))
-                stdscr.addstr(h - 1, 0, status.ljust(w)[: w - 1], curses.color_pair(11))
-            except curses.error:
-                pass
-            stdscr.refresh()
-
-            key = stdscr.getch()
-
-            if key in (ord("q"), 27):
+            k = stdscr.get_wch()
+        except curses.error:
+            continue
+        if isinstance(k, int):
+            if k in (10, 13, curses.KEY_ENTER):
                 break
-            elif key in (curses.KEY_DOWN, ord("j")):
-                if visible:
-                    selected = min(selected + 1, len(visible) - 1)
-            elif key in (curses.KEY_UP, ord("k")):
-                selected = max(selected - 1, 0)
-            elif key in (ord("g"),):
+            if k == 27:
+                return None
+            if k in (3, 4, 17):
+                return None
+            if k in (curses.KEY_BACKSPACE, 127, 8):
+                if cursor > 0:
+                    del chars[cursor - 1]
+                    cursor -= 1
+                continue
+            if k == curses.KEY_DC:
+                if cursor < len(chars):
+                    del chars[cursor]
+                continue
+            if k == curses.KEY_LEFT:
+                if cursor > 0:
+                    cursor -= 1
+                continue
+            if k == curses.KEY_RIGHT:
+                if cursor < len(chars):
+                    cursor += 1
+                continue
+            if k == curses.KEY_HOME:
+                cursor = 0
+                continue
+            if k == curses.KEY_END:
+                cursor = len(chars)
+                continue
+            if k == curses.KEY_UP or k == curses.KEY_DOWN:
+                continue
+            continue
+        # str key
+        if k in ("\r", "\n"):
+            break
+        if k == "\x1b":
+            return None
+        if k in ("\x03", "\x04", "\x11"):
+            return None
+        if k in ("\x7f", "\x08"):
+            if cursor > 0:
+                del chars[cursor - 1]
+                cursor -= 1
+            continue
+        if k == "\x01":
+            cursor = 0
+            continue
+        if k == "\x05":
+            cursor = len(chars)
+            continue
+        if k == "\x15":
+            chars = []; cursor = 0; offset = 0
+            continue
+        if k == "\x0b":
+            chars = chars[:cursor]
+            continue
+        if k == "\x17":
+            while cursor > 0 and chars[cursor - 1] == " ":
+                del chars[cursor - 1]; cursor -= 1
+            while cursor > 0 and chars[cursor - 1] != " ":
+                del chars[cursor - 1]; cursor -= 1
+            continue
+        if len(k) == 1 and ord(k) >= 32:
+            if len(chars) < MAX_INPUT:
+                chars.insert(cursor, k)
+                cursor += 1
+            continue
+    return trim("".join(chars))
+
+def run_tui(stdscr):
+    curses.curs_set(1)
+    stdscr.keypad(True)
+    try:
+        curses.use_default_colors()
+    except curses.error:
+        pass
+    selected = 0
+    filters = ["all", "todo", "done", "overdue", "today"]
+    filter_idx = 0
+    search = ""
+    status = "Press q or Esc to quit - j/k move, Space toggle, a add, e edit, d delete, / search, f filter"
+    while True:
+        rows, cols = stdscr.getmaxyx()
+        mode = filters[filter_idx]
+        visible = filtered_indices(mode, search)
+        if not visible:
+            selected = 0
+        else:
+            if selected >= len(visible):
+                selected = len(visible) - 1
+            if selected < 0:
                 selected = 0
-            elif key in (ord("G"),):
-                selected = max(0, len(visible) - 1)
-            elif key == ord(" "):
-                if visible:
-                    t = visible[selected]
-                    t.done = not t.done
-                    save_tasks(tasks)
-                    status = f"{'Done' if t.done else 'Undone'}: {t.text}"
-            elif key == ord("a"):
-                s = prompt(stdscr, h, w, "Add (e.g. (P1) 2026-12-01 Buy ass cream #personal): ")
+        stdscr.erase()
+        total = len(tasks)
+        done_n = count_done()
+        overdue_n = count_overdue()
+        header = f"tasks - {total} total | {done_n} done | {overdue_n} overdue | filter: {mode} | search: {search}"
+        stdscr.addstr(0, 0, header[:max(0, cols - 1)])
+        stdscr.addstr(1, 0, "#    []  P    Due         Text"[:max(0, cols - 1)])
+        stdscr.addstr(2, 0, ("-" * min(80, cols))[:max(0, cols - 1)])
+        max_rows = max(5, rows - 5)
+        for i, idx in enumerate(visible[:max_rows]):
+            t = tasks[idx]
+            mark = "x" if t.done else " "
+            line = f"{idx + 1:<4} [{mark}] "
+            if t.priority:
+                line += f"({t.priority}) "
+            if t.due:
+                line += f"due:{t.due} "
+            line += t.text
+            line = line[:max(0, cols - 1)]
+            y = 3 + i
+            if y >= rows - 2:
+                break
+            if i == selected:
+                stdscr.addstr(y, 0, line, curses.A_REVERSE)
+            elif t.done:
+                stdscr.addstr(y, 0, line, curses.A_DIM)
+            else:
+                stdscr.addstr(y, 0, line)
+        stdscr.move(rows - 2, 0)
+        stdscr.clrtoeol()
+        stdscr.addstr(rows - 2, 0, status[:max(0, cols - 1)])
+        stdscr.move(rows - 1, 0)
+        stdscr.clrtoeol()
+        stdscr.addstr(rows - 1, 0, "q / Esc / Ctrl-C to quit - j/k move - Space toggle - a add - e edit - d delete - / search - f filter - u undo - c clear - s stats"[:max(0, cols - 1)])
+        stdscr.move(rows - 1, 0)
+        stdscr.refresh()
+        try:
+            k = stdscr.get_wch()
+        except curses.error:
+            continue
+        # EXIT - checked FIRST
+        if isinstance(k, int):
+            if k == 27:
+                break
+            if k in (3, 4, 17):
+                break
+            if k == curses.KEY_DOWN:
+                if selected + 1 < len(visible):
+                    selected += 1
+            elif k == curses.KEY_UP:
+                if selected > 0:
+                    selected -= 1
+            continue
+        if k == "\x1b" or k in ("\x03", "\x04", "\x11"):
+            break
+        if k in ("q", "Q"):
+            break
+        if k == "j":
+            if selected + 1 < len(visible):
+                selected += 1
+        elif k == "k":
+            if selected > 0:
+                selected -= 1
+        elif k == "g":
+            selected = 0
+        elif k == "G":
+            if visible:
+                selected = len(visible) - 1
+        elif k == " ":
+            if visible:
+                idx = visible[selected]
+                tasks[idx].done = not tasks[idx].done
+                save_tasks()
+                status = "Marked done" if tasks[idx].done else "Marked todo"
+        elif k == "a":
+            s = prompt_input(stdscr, "Add:")
+            if s:
+                nt = parse_add_text(s)
+                tasks.append(nt)
+                save_tasks()
+                selected = len(tasks) - 1
+                status = "Added: " + nt.text
+            else:
+                status = "Add cancelled - press q or Esc to quit"
+        elif k == "e":
+            if visible:
+                idx = visible[selected]
+                old = tasks[idx]
+                s = prompt_input(stdscr, "Edit [" + old.text + "]:")
                 if s:
                     nt = parse_add_text(s)
-                    tasks.append(nt)
-                    save_tasks(tasks)
-                    selected = len(apply_filter(tasks, filter_mode, search)) - 1
-                    status = f"Added: {nt.text}"
-                else:
-                    status = "Add cancelled"
-            elif key == ord("e"):
-                if visible:
-                    t = visible[selected]
-                    s = prompt(stdscr, h, w, f"Edit: [{t.text}] -> ")
-                    if s:
-                        nt = parse_add_text(s)
-                        # keep old priority/due if new one didn't specify them
-                        if not nt.priority:
-                            nt.priority = t.priority
-                        if not nt.due:
-                            nt.due = t.due
-                        t.text = nt.text
-                        t.priority = nt.priority
-                        t.due = nt.due
-                        save_tasks(tasks)
-                        status = f"Edited: {t.text}"
-            elif key in (ord("x"), ord("D")):
-                if visible:
-                    t = visible[selected]
-                    tasks.remove(t)
-                    save_tasks(tasks)
-                    status = f"Removed: {t.text}"
-                    selected = max(0, selected - 1)
-            elif key == ord("/"):
-                s = prompt(stdscr, h, w, "Search (empty to clear): ")
+                    if not nt.priority:
+                        nt.priority = old.priority
+                    if not nt.due:
+                        nt.due = old.due
+                    nt.done = old.done
+                    tasks[idx] = nt
+                    save_tasks()
+                    status = "Edited"
+        elif k == "d":
+            if visible:
+                idx = visible[selected]
+                removed = tasks[idx].text
+                del tasks[idx]
+                save_tasks()
+                status = "Deleted: " + removed
+                if selected >= len(visible) - 1 and selected > 0:
+                    selected -= 1
+        elif k == "/":
+            s = prompt_input(stdscr, "Search:")
+            if s is not None:
                 search = s
                 selected = 0
-                status = f"Search: {search}" if search else "Search cleared"
-            elif key == ord("f"):
-                idx = filters.index(filter_mode)
-                filter_mode = filters[(idx + 1) % len(filters)]
-                selected = 0
-                status = f"Filter: {filter_mode}"
-            elif key == ord("u"):
-                if os.path.exists(BACKUP_FILE):
-                    shutil.copyfile(BACKUP_FILE, TASKS_FILE)
-                    tasks.clear()
-                    tasks.extend(load_tasks())
-                    status = "Undone - restored backup"
-                else:
-                    status = "No backup to undo"
-            elif key == ord("c"):
-                before = len(tasks)
-                tasks[:] = [t for t in tasks if not t.done]
-                save_tasks(tasks)
-                status = f"Cleared {before - len(tasks)} completed task(s)"
-            elif key == ord("s"):
-                total = len(tasks)
-                done_n = sum(1 for t in tasks if t.done)
-                status = f"Stats - Total {total} | Done {done_n} | Remaining {total - done_n} | Overdue {overdue_n}"
+                status = ("Search: " + search) if search else "Search cleared - press q or Esc to quit"
+        elif k == "f":
+            filter_idx = (filter_idx + 1) % len(filters)
+            selected = 0
+            status = "Filter: " + filters[filter_idx]
+        elif k == "u":
+            if os.path.exists(BACKUP_FILE):
+                shutil.copyfile(BACKUP_FILE, TASKS_FILE)
+                load_tasks()
+                status = "Undone"
+            else:
+                status = "No backup to undo"
+        elif k == "c":
+            before = len(tasks)
+            tasks[:] = [t for t in tasks if not t.done]
+            save_tasks()
+            status = f"Cleared {before - len(tasks)} done"
+            selected = 0
+        elif k == "s":
+            total2 = len(tasks); done2 = count_done(); over2 = count_overdue()
+            status = f"Total {total2} - Done {done2} - Todo {total2 - done2} - Overdue {over2}"
+        elif k == "?":
+            status = "Keys: q/Esc quit, j/k move, Space toggle, a add, e edit, d delete, / search, f filter, u undo, c clear, s stats"
 
-    curses.wrapper(main)
-
-
-# ---------- main CLI ----------
+def print_help():
+    print("Usage:")
+    print("  tasks tui                    Interactive TUI (default, no args = tui)")
+    print("  tasks add [--priority P1] [--due YYYY-MM-DD] <text>")
+    print("  tasks list [--tag X] [--project Y] [--priority P1] [--search Q] [--overdue|--today|--done|--todo]")
+    print("  tasks done <n>")
+    print("  tasks undone <n>")
+    print("  tasks rm <n>")
+    print("  tasks edit <n> <new text>")
+    print("  tasks search <query>")
+    print("  tasks clear")
+    print("  tasks stats")
+    print("  tasks undo")
+    print("  tasks help")
+    print()
+    print("Format: tasks.md lines are - [ ] (P1) due:2026-11-30 Buy milk #home +groceries")
+    print("Tags start with #, projects with +. Priority P1/P2/P3, due YYYY-MM-DD.")
+    print("TUI keys: j/k or arrows move, Space toggle, a add, e edit, d delete,")
+    print("  / search, f filter, u undo, c clear done, s stats, q / Esc / Ctrl-C to quit")
+    print("  In a prompt: Enter saves, Esc / Ctrl-C cancels")
 
 def main():
+    load_tasks()
     args = sys.argv[1:]
-    tasks = load_tasks()
-
     if not args or args[0] == "tui":
-        run_tui(tasks)
+        curses.wrapper(run_tui)
+        print("Exited TUI - back to shell. Use: python3 tasks.py list")
         return
-
     cmd = args[0]
-
-    if cmd in ("help", "-h", "--help"):
-        print(HELP)
-        return
-
-    if cmd == "add":
-        rest = args[1:]
-        priority = ""
-        due = ""
-        text_parts = []
-        i = 0
-        while i < len(rest):
-            if rest[i] == "--priority" and i + 1 < len(rest):
-                priority = rest[i + 1].upper(); i += 2; continue
-            if rest[i] == "--due" and i + 1 < len(rest):
-                due = rest[i + 1]; i += 2; continue
-            text_parts.append(rest[i]); i += 1
-        full = " ".join(text_parts)
-        if not full.strip():
-            print("Error: task text is required.")
-            return
-        t = parse_add_text(full)
+    if cmd in ("help", "--help", "-h"):
+        print_help()
+    elif cmd == "add":
+        priority = ""; due = ""; parts = []
+        i = 1
+        while i < len(args):
+            if args[i] == "--priority" and i + 1 < len(args):
+                priority = args[i + 1]; i += 2; continue
+            if args[i] == "--due" and i + 1 < len(args):
+                due = args[i + 1]; i += 2; continue
+            parts.append(args[i]); i += 1
+        buf = " ".join(parts)
+        if not trim(buf):
+            print("Usage: tasks add <text>"); return
+        t = parse_add_text(buf)
         if priority:
             t.priority = priority
         if due:
             t.due = due
-        tasks.append(t)
-        save_tasks(tasks)
-        print(f"Added: {format_task(t)}")
-        return
-
-    if cmd == "list":
-        cli_list(tasks, args[1:])
-        return
-
-    if cmd == "done":
+        tasks.append(t); save_tasks()
+        print("Added: " + t.text)
+    elif cmd == "list":
+        cli_list(args[1:])
+    elif cmd == "done":
         if len(args) < 2:
-            print("Error: invalid task number."); return
+            print("Usage: tasks done <n>"); return
         idx = parse_task_number(args[1], len(tasks))
         if idx is None:
-            print("Error: invalid task number."); return
-        tasks[idx].done = True
-        save_tasks(tasks)
-        print(f"Done: {tasks[idx].text}")
-        return
-
-    if cmd == "undone":
+            print("Invalid task number"); return
+        tasks[idx].done = True; save_tasks()
+        print("Done: " + tasks[idx].text)
+    elif cmd == "undone":
         if len(args) < 2:
-            print("Error: invalid task number."); return
+            print("Usage: tasks undone <n>"); return
         idx = parse_task_number(args[1], len(tasks))
         if idx is None:
-            print("Error: invalid task number."); return
-        tasks[idx].done = False
-        save_tasks(tasks)
-        print(f"Undone: {tasks[idx].text}")
-        return
-
-    if cmd == "rm":
+            print("Invalid task number"); return
+        tasks[idx].done = False; save_tasks()
+        print("Todo: " + tasks[idx].text)
+    elif cmd == "rm":
         if len(args) < 2:
-            print("Error: invalid task number."); return
+            print("Usage: tasks rm <n>"); return
         idx = parse_task_number(args[1], len(tasks))
         if idx is None:
-            print("Error: invalid task number."); return
-        removed = tasks.pop(idx)
-        save_tasks(tasks)
-        print(f"Removed: {removed.text}")
-        return
-
-    if cmd == "edit":
+            print("Invalid task number"); return
+        removed = tasks[idx].text
+        del tasks[idx]; save_tasks()
+        print("Deleted: " + removed)
+    elif cmd == "edit":
         if len(args) < 3:
-            print("Error: edit needs a number and new text."); return
+            print("Usage: tasks edit <n> <new text>"); return
         idx = parse_task_number(args[1], len(tasks))
         if idx is None:
-            print("Error: invalid task number."); return
+            print("Invalid task number"); return
         nt = parse_add_text(" ".join(args[2:]))
         old = tasks[idx]
         if not nt.priority:
@@ -573,61 +577,55 @@ def main():
         if not nt.due:
             nt.due = old.due
         nt.done = old.done
-        tasks[idx] = nt
-        save_tasks(tasks)
-        print(f"Edited: {format_task(nt)}")
-        return
-
-    if cmd == "search":
+        tasks[idx] = nt; save_tasks()
+        print(f"Edited {idx + 1}: {nt.text}")
+    elif cmd == "search":
         if len(args) < 2:
-            print("Error: search needs text."); return
-        q = " ".join(args[1:]).lower()
-        found = [t for t in tasks if q in t.text.lower()]
+            print("Usage: tasks search <query>"); return
+        q = " ".join(args[1:])
+        found = False
+        for i, t in enumerate(tasks):
+            if matches_search(t, q):
+                print_task(i, t); found = True
         if not found:
             print("No matches.")
-            return
-        for t in found:
-            print_task(tasks.index(t), t)
-        return
-
-    if cmd == "clear":
+    elif cmd == "clear":
         before = len(tasks)
         tasks[:] = [t for t in tasks if not t.done]
-        save_tasks(tasks)
-        print(f"Cleared {before - len(tasks)} completed task(s).")
-        return
-
-    if cmd == "stats":
-        total = len(tasks)
-        done_n = sum(1 for t in tasks if t.done)
-        overdue_n = sum(1 for t in tasks if is_overdue(t))
-        print(f"Total: {total} | Done: {done_n} | Remaining: {total - done_n} | Overdue: {overdue_n}")
-        # by tag
-        from collections import Counter
-        tag_c = Counter()
-        pri_c = Counter()
+        save_tasks()
+        print(f"Cleared {before - len(tasks)} done tasks")
+    elif cmd == "stats":
+        total = len(tasks); done_n = count_done(); over_n = count_overdue()
+        today_n = sum(1 for t in tasks if (not t.done) and is_today(t))
+        print(f"Total: {total}\nDone: {done_n}\nTodo: {total - done_n}\nOverdue: {over_n}\nDue today: {today_n}")
+        c1 = sum(1 for t in tasks if t.priority == "P1")
+        c2 = sum(1 for t in tasks if t.priority == "P2")
+        c3 = sum(1 for t in tasks if t.priority == "P3")
+        if c1 or c2 or c3:
+            print("By priority:")
+            if c1:
+                print(f"  P1: {c1}")
+            if c2:
+                print(f"  P2: {c2}")
+            if c3:
+                print(f"  P3: {c3}")
+        tag_counts = {}
         for t in tasks:
-            for tag in t.tags:
-                tag_c[tag] += 1
-            if t.priority:
-                pri_c[t.priority] += 1
-        if pri_c:
-            print("By priority: " + ", ".join(f"{k} {v}" for k, v in sorted(pri_c.items())))
-        if tag_c:
-            print("By tag: " + ", ".join(f"#{k} {v}" for k, v in tag_c.most_common()))
-        return
-
-    if cmd == "undo":
+            for tok in t.text.split():
+                if len(tok) > 1 and tok[0] == "#":
+                    tag_counts[tok] = tag_counts.get(tok, 0) + 1
+        if tag_counts:
+            print("By tag:")
+            for k in sorted(tag_counts):
+                print(f"  {k}: {tag_counts[k]}")
+    elif cmd == "undo":
         if not os.path.exists(BACKUP_FILE):
-            print("No backup to undo.")
-            return
+            print("No backup to undo"); return
         shutil.copyfile(BACKUP_FILE, TASKS_FILE)
-        print("Undone - restored backup.")
-        return
-
-    print(f"Error: unknown command '{cmd}'.")
-    print(HELP)
-
+        print("Undone - restored from backup")
+    else:
+        print("Unknown command: " + cmd)
+        print_help()
 
 if __name__ == "__main__":
     main()
