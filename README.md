@@ -2,7 +2,7 @@
 
 The same task-management command-line application implemented in ten languages to compare their syntax, idioms, tooling, and ergonomics against a common behavioral specification.
 
-See [docs/SPEC.md](docs/SPEC.md) for the shared commands, storage format, expected output, edge cases, and manual test sequence. The spec also preserves the original planning notes.
+See [docs/SPEC.md](docs/SPEC.md) for the original shared specification, including commands, storage format, expected output, edge cases, and manual test sequence. Python and Go now implement an expanded version of the app; the original spec remains a baseline rather than a description of every current feature.
 
 ## Implementations
 
@@ -23,6 +23,12 @@ Each language has its own directory under `src/`.
 
 Append `add "Buy milk"`, `list`, `done 1`, `rm 1`, `clear`, or `stats` to the invocation. Each implementation uses a `tasks.md` file in its working directory. Run in separate working directories for independent test data.
 
+### Expanded Python and Go versions
+
+Both now open an interactive terminal UI by default and support priorities, due dates, tags, projects, filters, editing, search, and undo via `tasks.md.bak`. Run with `help` to see the current CLI commands. Python's TUI uses `curses`; Go's uses ANSI terminal controls and `stty -F /dev/tty`.
+
+The expanded versions do not yet have identical output or due-date storage syntax (Python uses a bare date; Go uses `due:YYYY-MM-DD`). Use separate task files when comparing implementations.
+
 ## Status
 
-Source snapshot imported from Google Drive, including Ruby and Lua. The implementation files are unchanged; toolchain compatibility and behavioral conformance have not yet been verified. Build/run examples are illustrative, not a tested compatibility matrix.
+Source snapshot synchronized from Google Drive. Python and Go have expanded CLI/TUI implementations; the other languages retain the original baseline. The existing Zig implementation was retained because its Drive folder was empty at sync time. Toolchain compatibility and behavioral conformance have not yet been verified. Build/run examples are illustrative, not a tested compatibility matrix.
